@@ -23,8 +23,9 @@ def smoke(
     cfg = load_config(conditions_yaml)
     settings = load_settings()
     if not settings.is_complete():
+        missing = ", ".join(settings.missing_fields())
         typer.echo(
-            "ERROR: AZURE_OPENAI_API_KEY / ENDPOINT / DEPLOYMENT_NAME が未設定。.env を確認してください。",
+            f"ERROR: 環境変数が未設定: {missing}。.env を確認してください。",
             err=True,
         )
         raise typer.Exit(code=2)
@@ -46,8 +47,9 @@ def run(
     cfg = load_config(conditions_yaml)
     settings = load_settings()
     if not settings.is_complete():
+        missing = ", ".join(settings.missing_fields())
         typer.echo(
-            "ERROR: AZURE_OPENAI_API_KEY / ENDPOINT / DEPLOYMENT_NAME が未設定。.env を確認してください。",
+            f"ERROR: 環境変数が未設定: {missing}。.env を確認してください。",
             err=True,
         )
         raise typer.Exit(code=2)

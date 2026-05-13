@@ -6,7 +6,7 @@ import json
 import time
 from typing import Any
 
-from sor_lab.config import AzureOpenAISettings
+from sor_lab.config import AzureOpenAISettings, ModelSpec
 from sor_lab.evaluation import parse_plain_answer
 from sor_lab.prompts import get_prompt
 from sor_lab.runners._schema_utils import to_strict_schema
@@ -15,20 +15,29 @@ from sor_lab.schemas import get_schema
 
 
 class OpenAISdkRunner:
-    """OpenAI 公式 SDK の `AzureOpenAI` クライアント経由。"""
+    """OpenAI 公式 SDK の `AzureOpenAI` クライアント経由。
+
+    1 インスタンス = 1 (runner_type, model_spec)。実験ループ側で
+    `(runner_name, model_key)` をキーにキャッシュする。
+    """
 
     name = "openai_sdk"
 
-    def __init__(self, settings: AzureOpenAISettings) -> None:
+    def __init__(self, settings: AzureOpenAISettings, model_spec: ModelSpec) -> None:
         # 遅延 import (テスト時に SDK 不要パスを通せるようにする)
         from openai import AzureOpenAI
 
         self._settings = settings
+        self._model_spec = model_spec
         self._client = AzureOpenAI(
             api_key=settings.api_key,
             api_version=settings.api_version,
             azure_endpoint=settings.endpoint,
         )
+
+    @property
+    def model_spec(self) -> ModelSpec:
+        return self._model_spec
 
     def run(
         self,
@@ -46,10 +55,14 @@ class OpenAISdkRunner:
 
         schema_cls = get_schema(condition_id)
         kwargs: dict[str, Any] = {
-            "model": self._settings.deployment_name,
+            "model": self._model_spec.deployment,
             "messages": messages,
-            "temperature": temperature,
         }
+        if self._model_spec.reasoning_effort is not None:
+            # reasoning モデルは temperature を受け付けないため明示的に渡さない
+            kwargs["reasoning_effort"] = self._model_spec.reasoning_effort
+        else:
+            kwargs["temperature"] = temperature
         if seed is not None:
             kwargs["seed"] = seed
 
@@ -72,6 +85,7 @@ class OpenAISdkRunner:
         usage = resp.usage
         prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
         completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        model_string = getattr(resp, "model", None)
 
         return _parse_response(
             raw=content,
@@ -79,6 +93,7 @@ class OpenAISdkRunner:
             latency_ms=latency_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model_string=model_string,
         )
 
 
@@ -88,6 +103,7 @@ def _parse_response(
     latency_ms: int,
     prompt_tokens: int | None,
     completion_tokens: int | None,
+    model_string: str | None = None,
 ) -> RunnerResult:
     """Plain / Structured 共通の parse ロジック。"""
     if not structured:
@@ -101,6 +117,7 @@ def _parse_response(
             latency_ms=latency_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model_string=model_string,
         )
 
     try:
@@ -115,6 +132,7 @@ def _parse_response(
             latency_ms=latency_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model_string=model_string,
         )
 
     keys = list(data.keys())
@@ -144,6 +162,7 @@ def _parse_response(
         latency_ms=latency_ms,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
+        model_string=model_string,
     )
 
 

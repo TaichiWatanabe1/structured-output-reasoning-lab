@@ -3,14 +3,15 @@
 
 # Stage 定義: 軸1 (Output × Prompt) × 軸2 (StepConstrained のサブ条件) を列挙
 conditions:
-  # 軸1: 5 条件
+  # 軸1: 主要4条件
   - id: plain_direct
   - id: plain_cot
   - id: so_answer_first
   - id: so_reasoning_first
 
-  # 軸2: StepConstrained 縮小版 (n_steps ∈ {1,5,10} × answer_first=False)
+  # 軸2: StepConstrained (n_steps ∈ {1, 3, 5, 10} × answer_first=False の 4 サブ条件)
   - id: "so_step_constrained:n_steps=1:answer_first=False"
+  - id: "so_step_constrained:n_steps=3:answer_first=False"
   - id: "so_step_constrained:n_steps=5:answer_first=False"
   - id: "so_step_constrained:n_steps=10:answer_first=False"
 
@@ -26,13 +27,16 @@ temp_sets:
     temperature: 0.7
     n_tries: 5
 
-# データ
+# 軸5 (Model) は .env の AZURE_OPENAI_DEPLOYMENT_NAME_GPT41 / _GPT41_MINI / _GPT5
+# で指定されたデプロイから自動列挙される。本ファイルには記述しない。
+
+# データ (MGSM-ja 全 250 問)
 dataset:
-  name: gsm8k
+  name: mgsm
+  config: ja
   split: test
-  config: main
   seed: 42
-  n: 50
+  n: 250
 
 # Stage プリセット (CLI `--stage <name>` で選択)
 stages:
@@ -42,23 +46,28 @@ stages:
     temp_sets: [det]
     n_questions: 1
   b1:
+    # Plain + SO 基本 (4 cond) × det × 3 model
     conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first]
     runners: [openai_sdk, azure_sdk, langchain]
     temp_sets: [det]
   b2:
+    # StepConstrained 全 4 サブ条件 × det × 3 model
     conditions:
       - "so_step_constrained:n_steps=1:answer_first=False"
+      - "so_step_constrained:n_steps=3:answer_first=False"
       - "so_step_constrained:n_steps=5:answer_first=False"
       - "so_step_constrained:n_steps=10:answer_first=False"
     runners: [openai_sdk, azure_sdk, langchain]
     temp_sets: [det]
   b3:
+    # 全 8 条件 × sc (T=0.7×5) × 3 model
     conditions:
       - plain_direct
       - plain_cot
       - so_answer_first
       - so_reasoning_first
       - "so_step_constrained:n_steps=1:answer_first=False"
+      - "so_step_constrained:n_steps=3:answer_first=False"
       - "so_step_constrained:n_steps=5:answer_first=False"
       - "so_step_constrained:n_steps=10:answer_first=False"
     runners: [openai_sdk, azure_sdk, langchain]

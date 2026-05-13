@@ -1,7 +1,10 @@
-"""GSM8K サブセットのロード。
+"""MGSM-ja サブセットのロード。
 
-`datasets` ライブラリで `gsm8k` (`main` config) の `test` split をロードし、
-`random.Random(42).sample(...)` で seed 固定のサブセットを抽出する。
+`datasets` ライブラリで `juletxara/mgsm` の `ja` split を全件 (250 問) ロードし、
+そのまま `Problem` に変換する。本実験は MGSM 全件投入 (n=250) を前提とする。
+
+任意の `n` < 250 を指定した場合は `random.Random(seed).sample(...)` で
+シード固定サブセットを取る (smoke test 等の小規模実行向け)。
 """
 
 from __future__ import annotations
@@ -11,11 +14,10 @@ import random
 from dataclasses import dataclass
 from typing import Any
 
-from sor_lab.evaluation import parse_gold_answer
-
 
 DEFAULT_SEED = 42
-DEFAULT_SUBSET_SIZE = 50
+MGSM_JA_FULL_SIZE = 250
+DEFAULT_SUBSET_SIZE = MGSM_JA_FULL_SIZE
 
 
 @dataclass(frozen=True)
@@ -32,14 +34,30 @@ def _maybe_set_cache_dir() -> None:
         os.environ["HF_DATASETS_CACHE"] = os.path.join(os.getcwd(), "data", "hf_cache")
 
 
-def load_gsm8k_test(cache_dir: str | None = None) -> list[dict[str, Any]]:
-    """GSM8K `main/test` を全件ロードして dict のリストとして返す。"""
+def load_mgsm_ja(cache_dir: str | None = None) -> list[dict[str, Any]]:
+    """MGSM `ja` split を全件 (250) ロードして dict のリストとして返す。"""
     _maybe_set_cache_dir()
     # `datasets` は重い import なので関数内で遅延 import する。
     from datasets import load_dataset
 
-    ds = load_dataset("gsm8k", "main", split="test", cache_dir=cache_dir)
+    ds = load_dataset("juletxara/mgsm", "ja", split="test", cache_dir=cache_dir)
     return [dict(row) for row in ds]
+
+
+def _row_to_problem(idx: int, row: dict[str, Any]) -> Problem:
+    """MGSM 1 行を `Problem` に変換。
+
+    MGSM スキーマ: `question` (str), `answer_number` (int), `answer` (str, 解説本文)。
+    """
+    answer_number = row.get("answer_number")
+    if answer_number is None:
+        raise ValueError(f"MGSM row {idx} has no answer_number: {row!r}")
+    return Problem(
+        question_id=f"mgsm_ja_{idx}",
+        question=str(row["question"]),
+        gold_answer=int(answer_number),
+        reference=str(row.get("answer", "")),
+    )
 
 
 def sample_subset(
@@ -47,28 +65,19 @@ def sample_subset(
     n: int = DEFAULT_SUBSET_SIZE,
     seed: int = DEFAULT_SEED,
 ) -> list[Problem]:
-    """シード固定サブセット。`question_id` は `gsm8k_test_<元 index>` 形式。
+    """シード固定サブセット。`question_id` は `mgsm_ja_<元 index>` 形式。
 
-    `random.Random(seed).sample(...)` の挙動が Python パッチバージョンで変わると
-    再現性が壊れるため、`requires-python==3.12.4` で固定している前提。
+    `n` が `len(rows)` 以上ならソート済みの全件を返す (シャッフルしない)。
+    `n` < `len(rows)` の場合は `random.Random(seed).sample(...)` で抽出。
     """
-    indices = list(range(len(rows)))
-    chosen = random.Random(seed).sample(indices, n)
-    chosen.sort()
+    total = len(rows)
+    if n >= total:
+        chosen = list(range(total))
+    else:
+        chosen = random.Random(seed).sample(range(total), n)
+        chosen.sort()
 
-    out: list[Problem] = []
-    for idx in chosen:
-        row = rows[idx]
-        reference = str(row["answer"])
-        out.append(
-            Problem(
-                question_id=f"gsm8k_test_{idx}",
-                question=str(row["question"]),
-                gold_answer=parse_gold_answer(reference),
-                reference=reference,
-            )
-        )
-    return out
+    return [_row_to_problem(idx, rows[idx]) for idx in chosen]
 
 
 def load_subset(
@@ -76,8 +85,8 @@ def load_subset(
     seed: int = DEFAULT_SEED,
     cache_dir: str | None = None,
 ) -> list[Problem]:
-    """全体をロードして seed 固定サブセットを取る便利関数。"""
-    rows = load_gsm8k_test(cache_dir=cache_dir)
+    """全体をロードしてサブセットを取る便利関数。デフォルトは MGSM-ja 全 250 問。"""
+    rows = load_mgsm_ja(cache_dir=cache_dir)
     return sample_subset(rows, n=n, seed=seed)
 
 
@@ -85,7 +94,8 @@ __all__ = [
     "Problem",
     "DEFAULT_SEED",
     "DEFAULT_SUBSET_SIZE",
-    "load_gsm8k_test",
+    "MGSM_JA_FULL_SIZE",
+    "load_mgsm_ja",
     "sample_subset",
     "load_subset",
 ]

@@ -1,11 +1,11 @@
 """JSONL → summary.md 集計。
 
 主要指標:
-  - 条件 × Runner × temp_set の正解率 + Wilson 95% CI
+  - 条件 × Runner × Model × temp_set の正解率 + Wilson 95% CI (単一比率の表示用)
   - temp_set=sc は多数決の正解率も別計算
-  - 順序効果 (so_reasoning_first vs so_answer_first) を McNemar 検定
+  - 順序効果 (so_reasoning_first vs so_answer_first) を McNemar 検定 + Newcombe paired CI
   - Runner 差分 (3 Runner の max-min)
-  - キー順 warning 集計
+  - キー順序違反 (`key_order_violation` フラグ) を model_key × 条件 × runner で集計
 """
 
 from __future__ import annotations
@@ -17,6 +17,11 @@ from typing import Any
 import pandas as pd
 
 from sor_lab.evaluation import majority_vote, wilson_ci
+from sor_lab.stats import newcombe_paired_diff_ci
+
+
+# JSONL に model_key が無い旧データ用フォールバック。新実装では必ず付与される。
+_DEFAULT_MODEL_KEY = "unknown"
 
 
 def load_jsonl(path: Path) -> pd.DataFrame:
@@ -29,24 +34,27 @@ def load_jsonl(path: Path) -> pd.DataFrame:
             rows.append(json.loads(line))
     if not rows:
         return pd.DataFrame()
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    if "model_key" not in df.columns:
+        df["model_key"] = _DEFAULT_MODEL_KEY
+    return df
 
 
 # ---- 集計 -------------------------------------------------------------------
 
 
 def accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
-    """`(condition_id, runner, temp_set)` ごとの正解率と Wilson CI、parse 失敗率。
+    """`(condition_id, runner, model_key, temp_set)` ごとの正解率と Wilson CI、parse 失敗率。
 
-    temp_set=sc は単発平均 (try ごとの correct を平均) のみ。
-    多数決は `majority_accuracy_table` で別途。
+    Wilson CI は単一比率の点推定表示用。paired 比較は別関数で Newcombe CI を使う。
+    temp_set=sc は単発平均 (try ごとの correct を平均) のみ。多数決は `majority_accuracy_table` で別途。
     """
     if df.empty:
         return pd.DataFrame()
-    grouped = df.groupby(["condition_id", "runner", "temp_set"])
+    grouped = df.groupby(["condition_id", "runner", "model_key", "temp_set"])
 
     records: list[dict[str, Any]] = []
-    for (cond, runner, ts), g in grouped:
+    for (cond, runner, model_key, ts), g in grouped:
         n = len(g)
         successes = int(g["correct"].sum())
         ci = wilson_ci(successes, n)
@@ -54,12 +62,18 @@ def accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
             {
                 "condition_id": cond,
                 "runner": runner,
+                "model_key": model_key,
                 "temp_set": ts,
                 "n": n,
                 "accuracy": successes / n if n else 0.0,
                 "ci_lower": ci.lower,
                 "ci_upper": ci.upper,
                 "parse_fail_rate": g["parse_failed"].mean() if "parse_failed" in g else 0.0,
+                "key_order_violation_rate": (
+                    g["key_order_violation"].mean()
+                    if "key_order_violation" in g
+                    else 0.0
+                ),
                 "mean_step_count": (
                     g["parsed_reasoning_step_count"].mean()
                     if "parsed_reasoning_step_count" in g
@@ -69,7 +83,7 @@ def accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
             }
         )
     return pd.DataFrame.from_records(records).sort_values(
-        ["temp_set", "condition_id", "runner"]
+        ["temp_set", "model_key", "condition_id", "runner"]
     )
 
 
@@ -82,7 +96,7 @@ def majority_accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     records: list[dict[str, Any]] = []
-    for (cond, runner), g in sc.groupby(["condition_id", "runner"]):
+    for (cond, runner, model_key), g in sc.groupby(["condition_id", "runner", "model_key"]):
         per_question = g.groupby("question_id").agg(
             answers=("parsed_answer", list),
             gold=("gold_answer", "first"),
@@ -96,6 +110,7 @@ def majority_accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
             {
                 "condition_id": cond,
                 "runner": runner,
+                "model_key": model_key,
                 "temp_set": "sc_majority",
                 "n": n,
                 "accuracy": successes / n if n else 0.0,
@@ -103,13 +118,16 @@ def majority_accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
                 "ci_upper": ci.upper,
             }
         )
-    return pd.DataFrame.from_records(records).sort_values(["condition_id", "runner"])
+    return pd.DataFrame.from_records(records).sort_values(
+        ["model_key", "condition_id", "runner"]
+    )
 
 
 def order_effect_mcnemar(df: pd.DataFrame) -> pd.DataFrame:
-    """順序効果 H1: so_reasoning_first vs so_answer_first を Runner ごとに検定。
+    """順序効果 H1: so_reasoning_first vs so_answer_first を Runner × Model ごとに検定。
 
     同じ question_id 上のペア比較。temp_set=det のみを対象。
+    Newcombe paired CI も併記する。
     """
     if df.empty:
         return pd.DataFrame()
@@ -122,104 +140,107 @@ def order_effect_mcnemar(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     records: list[dict[str, Any]] = []
-    for runner in sorted(set(af["runner"]) & set(rf["runner"])):
-        af_r = af[af["runner"] == runner].set_index("question_id")["correct"]
-        rf_r = rf[rf["runner"] == runner].set_index("question_id")["correct"]
+    pairs = (
+        set(zip(af["runner"], af["model_key"], strict=True))
+        & set(zip(rf["runner"], rf["model_key"], strict=True))
+    )
+    for runner, model_key in sorted(pairs):
+        af_g = af[(af["runner"] == runner) & (af["model_key"] == model_key)]
+        rf_g = rf[(rf["runner"] == runner) & (rf["model_key"] == model_key)]
+        af_r = af_g.set_index("question_id")["correct"]
+        rf_r = rf_g.set_index("question_id")["correct"]
         common = af_r.index.intersection(rf_r.index)
         if len(common) == 0:
             continue
         af_c = af_r.loc[common].astype(bool)
         rf_c = rf_r.loc[common].astype(bool)
-        # contingency:
-        # b = af correct, rf wrong  (RF が劣る方向)
-        # c = af wrong, rf correct  (RF が優る方向)
-        b = int(((af_c) & (~rf_c)).sum())
-        c = int(((~af_c) & (rf_c)).sum())
-        # 2x2 table for mcnemar
-        table = [[int((af_c & rf_c).sum()), b], [c, int((~af_c & ~rf_c).sum())]]
+        e = int(((af_c) & (rf_c)).sum())  # 両方正解
+        f = int(((af_c) & (~rf_c)).sum())  # AF のみ正解 (b)
+        g = int(((~af_c) & (rf_c)).sum())  # RF のみ正解 (c)
+        h = int(((~af_c) & (~rf_c)).sum())  # 両方不正解
+        table = [[e, f], [g, h]]
         try:
             result = mcnemar(table, exact=True)
             pval = float(result.pvalue)
         except Exception:  # noqa: BLE001
             pval = float("nan")
+        # Newcombe paired CI (RF - AF の方向で diff を計算したいので A=RF, B=AF)
+        # 引数の意味: e=A正解&B正解, f=A正解&B不正解, g=A不正解&B正解, h=両方不正解
+        # A=RF, B=AF にマッピング: e=両方, f=RF only, g=AF only, h=両方不正解
+        ci = newcombe_paired_diff_ci(e=e, f=g, g=f, h=h)  # noqa: E501
         af_acc = float(af_c.mean())
         rf_acc = float(rf_c.mean())
         records.append(
             {
                 "runner": runner,
+                "model_key": model_key,
                 "n_paired": int(len(common)),
                 "answer_first_acc": af_acc,
                 "reasoning_first_acc": rf_acc,
                 "diff_pp": (rf_acc - af_acc) * 100.0,
-                "b_af_only": b,
-                "c_rf_only": c,
+                "newcombe_lower_pp": ci.lower * 100.0,
+                "newcombe_upper_pp": ci.upper * 100.0,
+                "b_af_only": f,
+                "c_rf_only": g,
                 "mcnemar_p": pval,
             }
         )
-    return pd.DataFrame.from_records(records)
+    return pd.DataFrame.from_records(records).sort_values(["model_key", "runner"])
 
 
 def runner_spread(df: pd.DataFrame) -> pd.DataFrame:
-    """H4: 同条件で 3 Runner の正解率 max-min を計算。"""
+    """H4: 同条件 × Model で 3 Runner の正解率 max-min を計算。"""
     if df.empty:
         return pd.DataFrame()
     det = df[df["temp_set"] == "det"]
     if det.empty:
         return pd.DataFrame()
     records: list[dict[str, Any]] = []
-    for cond, g in det.groupby("condition_id"):
+    for (cond, model_key), g in det.groupby(["condition_id", "model_key"]):
         per_runner = g.groupby("runner")["correct"].mean()
         records.append(
             {
                 "condition_id": cond,
+                "model_key": model_key,
                 **{f"acc_{r}": float(per_runner.get(r, float("nan"))) for r in per_runner.index},
                 "max_minus_min_pp": (per_runner.max() - per_runner.min()) * 100.0,
             }
         )
-    return pd.DataFrame.from_records(records)
+    return pd.DataFrame.from_records(records).sort_values(["model_key", "condition_id"])
 
 
 def key_order_warnings(df: pd.DataFrame) -> pd.DataFrame:
-    """raw_response_keys が宣言順と一致しない件数 (Structured 条件のみ)。"""
-    if df.empty or "raw_response_keys" not in df.columns:
+    """`key_order_violation` フラグ集計。条件 × Model × Runner で件数とレート。"""
+    if df.empty:
         return pd.DataFrame()
 
-    from sor_lab.schemas import field_order, get_schema
+    structured = df[df["raw_response_keys"].notna()] if "raw_response_keys" in df.columns else df
 
-    expected_cache: dict[str, list[str] | None] = {}
-
-    def expected(cond_id: str) -> list[str] | None:
-        if cond_id in expected_cache:
-            return expected_cache[cond_id]
-        schema_cls = get_schema(cond_id)
-        if schema_cls is None:
-            expected_cache[cond_id] = None
-            return None
-        expected_cache[cond_id] = field_order(schema_cls)
-        return expected_cache[cond_id]
+    if structured.empty:
+        return pd.DataFrame()
 
     records: list[dict[str, Any]] = []
-    for (cond, runner), g in df.groupby(["condition_id", "runner"]):
-        exp = expected(cond)
-        if exp is None:
-            continue  # Plain 条件は Structured 検査対象外
-        total = 0
-        mismatches = 0
-        for keys in g["raw_response_keys"]:
-            if keys is None:
-                continue
-            total += 1
-            if list(keys) != exp:
-                mismatches += 1
+    for (cond, runner, model_key), g in structured.groupby(
+        ["condition_id", "runner", "model_key"]
+    ):
+        total = len(g)
+        if "key_order_violation" in g.columns:
+            mismatches = int(g["key_order_violation"].fillna(False).astype(bool).sum())
+        else:
+            mismatches = 0
         records.append(
             {
                 "condition_id": cond,
                 "runner": runner,
+                "model_key": model_key,
                 "structured_calls": total,
                 "key_order_mismatches": mismatches,
+                "violation_rate": (mismatches / total) if total else 0.0,
             }
         )
-    return pd.DataFrame.from_records(records)
+    return pd.DataFrame.from_records(records).sort_values(
+        ["model_key", "condition_id", "runner"]
+    )
 
 
 # ---- summary.md 生成 --------------------------------------------------------
@@ -249,23 +270,33 @@ def write_summary(
         sections.append(
             f"- stage: `{meta.get('stage')}`\n"
             f"- git_commit: `{meta.get('git_commit')}` (dirty={meta.get('git_dirty')})\n"
-            f"- deployment: `{meta.get('deployment')}` / api_version: `{meta.get('api_version')}`\n"
+            f"- api_version: `{meta.get('api_version')}` / exec_seed: `{meta.get('exec_seed')}`\n"
             f"- conditions.yaml sha256: `{meta.get('conditions_yaml_sha256')}`\n"
         )
+        models = meta.get("models") or []
+        if models:
+            sections.append("\n### Models\n")
+            for m in models:
+                sections.append(
+                    f"- `{m.get('key')}` deployment=`{m.get('deployment')}` "
+                    f"reasoning_effort=`{m.get('reasoning_effort')}`\n"
+                )
 
-    sections.append("\n## Accuracy by (condition, runner, temp_set)\n")
+    sections.append("\n## Accuracy by (condition, runner, model_key, temp_set)\n")
     sections.append(_df_to_markdown(accuracy_table(df)))
 
     sections.append("\n## Self-consistency majority vote accuracy (temp_set=sc)\n")
     sections.append(_df_to_markdown(majority_accuracy_table(df)))
 
-    sections.append("\n## H1 — Order effect (so_reasoning_first vs so_answer_first)\n")
+    sections.append(
+        "\n## H1 — Order effect (so_reasoning_first vs so_answer_first) [+Newcombe paired CI]\n"
+    )
     sections.append(_df_to_markdown(order_effect_mcnemar(df)))
 
     sections.append("\n## H4 — Runner spread (max - min, percentage points)\n")
     sections.append(_df_to_markdown(runner_spread(df)))
 
-    sections.append("\n## Key order warnings (raw_response_keys vs declared)\n")
+    sections.append("\n## Key order violations (raw_response_keys vs declared)\n")
     sections.append(_df_to_markdown(key_order_warnings(df)))
 
     out = root / "summary.md"

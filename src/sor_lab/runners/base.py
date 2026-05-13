@@ -30,6 +30,10 @@ class RunnerResult:
     prompt_tokens: int | None
     completion_tokens: int | None
 
+    model_string: str | None = None
+    """API レスポンスの `model` フィールド (例: `gpt-4.1-2025-04-14`)。
+    Azure 内部でモデルバージョンが更新されたかの検出に使う。"""
+
 
 class Runner(Protocol):
     """LLM 呼び出し抽象。実装は `openai_sdk` / `azure_sdk` / `langchain`。"""

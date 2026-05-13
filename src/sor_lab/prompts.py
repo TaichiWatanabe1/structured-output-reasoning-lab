@@ -1,6 +1,7 @@
-"""5 条件分のシステム / ユーザープロンプトを正本として保持する。
+"""5 条件分のシステム / ユーザープロンプトを正本として保持する (日本語固定)。
 
 実験条件のあいだで「reasoning を促す表現」を厳密に揃えるためのモジュール。
+本実験では入出力言語を日本語に固定する (本番システムが日本語向けのため)。
 変更時は docs/experiment_design.md §7 のリビジョンも更新する。
 """
 
@@ -22,30 +23,34 @@ class PromptTemplate:
 
 _USER_TEMPLATE = "{question}"
 
+# Structured Output 3 条件で共有するシステムプロンプト (順序のみが独立変数)
+_SO_SYSTEM = "あなたは算数の教師です。スキーマに一致する JSON を返してください。"
+
 PROMPTS: dict[str, PromptTemplate] = {
     "plain_direct": PromptTemplate(
         system=(
-            "You are a math tutor. Answer with only the final integer, nothing else."
+            "あなたは算数の教師です。最終的な整数の答えだけを出力してください。"
+            "他の文字は一切含めないでください。"
         ),
         user=_USER_TEMPLATE,
     ),
     "plain_cot": PromptTemplate(
         system=(
-            "You are a math tutor. Think step by step, then write the final integer "
-            "on the last line prefixed by 'Answer: '."
+            "あなたは算数の教師です。順を追って考え、最後の行に整数の答えを "
+            "「Answer: 」の後に記載してください。"
         ),
         user=_USER_TEMPLATE,
     ),
     "so_answer_first": PromptTemplate(
-        system="You are a math tutor. Return JSON matching the schema.",
+        system=_SO_SYSTEM,
         user=_USER_TEMPLATE,
     ),
     "so_reasoning_first": PromptTemplate(
-        system="You are a math tutor. Return JSON matching the schema.",
+        system=_SO_SYSTEM,
         user=_USER_TEMPLATE,
     ),
     "so_step_constrained": PromptTemplate(
-        system="You are a math tutor. Return JSON matching the schema.",
+        system=_SO_SYSTEM,
         user=_USER_TEMPLATE,
     ),
 }

@@ -8,7 +8,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from sor_lab.config import AzureOpenAISettings
+from sor_lab.config import AzureOpenAISettings, ModelSpec
 from sor_lab.prompts import get_prompt
 from sor_lab.runners._schema_utils import to_strict_schema
 from sor_lab.runners.base import RunnerResult
@@ -17,27 +17,32 @@ from sor_lab.schemas import get_schema
 
 
 class AzureSdkRunner:
-    """`azure.ai.inference.ChatCompletionsClient` 経由。"""
+    """`azure.ai.inference.ChatCompletionsClient` 経由。1 インスタンス = 1 model_spec。"""
 
     name = "azure_sdk"
 
-    def __init__(self, settings: AzureOpenAISettings) -> None:
+    def __init__(self, settings: AzureOpenAISettings, model_spec: ModelSpec) -> None:
         from azure.ai.inference import ChatCompletionsClient
         from azure.core.credentials import AzureKeyCredential
 
         self._settings = settings
+        self._model_spec = model_spec
         # Azure OpenAI deployment は `<endpoint>/openai/deployments/<deployment>` を
         # base にして API version をクエリで渡す形式。`azure-ai-inference` は
         # `endpoint` をそのまま受け取り、内部で URL を組み立てる。
         deployment_endpoint = (
             settings.endpoint.rstrip("/")
-            + f"/openai/deployments/{settings.deployment_name}"
+            + f"/openai/deployments/{model_spec.deployment}"
         )
         self._client = ChatCompletionsClient(
             endpoint=deployment_endpoint,
             credential=AzureKeyCredential(settings.api_key),
             api_version=settings.api_version,
         )
+
+    @property
+    def model_spec(self) -> ModelSpec:
+        return self._model_spec
 
     def run(
         self,
@@ -59,9 +64,12 @@ class AzureSdkRunner:
         schema_cls = get_schema(condition_id)
         kwargs: dict[str, Any] = {
             "messages": messages,
-            "temperature": temperature,
-            "model": self._settings.deployment_name,
+            "model": self._model_spec.deployment,
         }
+        if self._model_spec.reasoning_effort is not None:
+            kwargs["reasoning_effort"] = self._model_spec.reasoning_effort
+        else:
+            kwargs["temperature"] = temperature
         if seed is not None:
             kwargs["seed"] = seed
 
@@ -82,6 +90,7 @@ class AzureSdkRunner:
         usage = getattr(resp, "usage", None)
         prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
         completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+        model_string = getattr(resp, "model", None)
 
         return _parse_response(
             raw=content,
@@ -89,6 +98,7 @@ class AzureSdkRunner:
             latency_ms=latency_ms,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
+            model_string=model_string,
         )
 
 
