@@ -52,7 +52,7 @@ def _inline_defs(schema: dict[str, Any]) -> dict[str, Any]:
             return [replace(v) for v in node]
         return node
 
-    return replace(schema)
+    return replace(schema)  # type: ignore[no-any-return]
 
 
 def _normalize(schema: dict[str, Any]) -> dict[str, Any]:
@@ -69,7 +69,7 @@ def _normalize(schema: dict[str, Any]) -> dict[str, Any]:
             return [walk(v) for v in node]
         return node
 
-    return walk(schema)
+    return walk(schema)  # type: ignore[no-any-return]
 
 
 def schema_property_order(schema: dict[str, Any]) -> list[str]:

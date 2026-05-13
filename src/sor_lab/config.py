@@ -26,4 +26,4 @@ class AzureOpenAISettings(BaseSettings):
 
 
 def load_settings() -> AzureOpenAISettings:
-    return AzureOpenAISettings()  # type: ignore[call-arg]
+    return AzureOpenAISettings()

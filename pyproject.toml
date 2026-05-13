@@ -50,3 +50,8 @@ target-version = "py312"
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# LangChain の型スタブが不完全なため、langchain runner は mypy strict 対象外とする
+module = "sor_lab.runners.langchain"
+ignore_errors = true

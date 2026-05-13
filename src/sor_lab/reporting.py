@@ -228,7 +228,7 @@ def key_order_warnings(df: pd.DataFrame) -> pd.DataFrame:
 def _df_to_markdown(df: pd.DataFrame) -> str:
     if df.empty:
         return "_(no data)_\n"
-    return df.to_markdown(index=False, floatfmt=".4f") + "\n"
+    return (df.to_markdown(index=False, floatfmt=".4f") or "") + "\n"
 
 
 def write_summary(
