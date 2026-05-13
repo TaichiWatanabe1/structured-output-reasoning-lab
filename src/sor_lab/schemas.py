@@ -63,7 +63,7 @@ def make_step_constrained(n_steps: int, answer_first: bool) -> type[BaseModel]:
         }
         cls_name = f"StepConstrained_RF{n_steps}"
 
-    return create_model(  # type: ignore[call-overload]
+    return create_model(  # type: ignore[call-overload, no-any-return]
         cls_name,
         __base__=_StrictModel,
         **fields,
