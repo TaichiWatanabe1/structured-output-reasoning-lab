@@ -1,0 +1,31 @@
+# env
+.env
+.env.local
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# data (HuggingFace cache, not reproducible by lockfile)
+data/
+
+# results — keep structure but ignore raw artifacts
+results/runs/*
+!results/runs/.gitkeep
+!results/runs/README.md
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

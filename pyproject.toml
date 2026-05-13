@@ -1,0 +1,52 @@
+[project]
+name = "sor-lab"
+version = "0.1.0"
+description = "Structured Output Reasoning Lab — Pydantic field-order effects on LLM accuracy"
+readme = "README.md"
+authors = [
+    { name = "TaichiWatanabe1", email = "Taichi.Watanabe1@jp.ricoh.com" }
+]
+requires-python = "==3.12.4"
+dependencies = [
+    "azure-ai-inference==1.0.0b9",
+    "datasets==4.8.5",
+    "langchain-core==1.4.0",
+    "langchain-openai==1.2.1",
+    "openai==2.36.0",
+    "pandas==3.0.3",
+    "pydantic==2.13.4",
+    "pydantic-settings==2.14.1",
+    "python-dotenv==1.2.2",
+    "pyyaml==6.0.3",
+    "statsmodels==0.14.6",
+    "tabulate==0.10.0",
+    "typer==0.25.1",
+]
+
+[dependency-groups]
+dev = [
+    "mypy==2.1.0",
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.12",
+]
+
+[project.scripts]
+sor-lab = "sor_lab.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true

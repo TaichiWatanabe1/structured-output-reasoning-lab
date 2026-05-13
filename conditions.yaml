@@ -1,0 +1,65 @@
+# 実験条件の宣言ファイル。`experiment.py` がこれを読んでループする。
+# 変更時は docs/experiment_design.md §6 と整合性を保つこと。
+
+# Stage 定義: 軸1 (Output × Prompt) × 軸2 (StepConstrained のサブ条件) を列挙
+conditions:
+  # 軸1: 5 条件
+  - id: plain_direct
+  - id: plain_cot
+  - id: so_answer_first
+  - id: so_reasoning_first
+
+  # 軸2: StepConstrained 縮小版 (n_steps ∈ {1,5,10} × answer_first=False)
+  - id: "so_step_constrained:n_steps=1:answer_first=False"
+  - id: "so_step_constrained:n_steps=5:answer_first=False"
+  - id: "so_step_constrained:n_steps=10:answer_first=False"
+
+# 軸3: Runner
+runners: [openai_sdk, azure_sdk, langchain]
+
+# 軸4: Temperature × N
+temp_sets:
+  det:
+    temperature: 0.0
+    n_tries: 1
+  sc:
+    temperature: 0.7
+    n_tries: 5
+
+# データ
+dataset:
+  name: gsm8k
+  split: test
+  config: main
+  seed: 42
+  n: 50
+
+# Stage プリセット (CLI `--stage <name>` で選択)
+stages:
+  smoke:
+    conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first]
+    runners: [openai_sdk, azure_sdk, langchain]
+    temp_sets: [det]
+    n_questions: 1
+  b1:
+    conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first]
+    runners: [openai_sdk, azure_sdk, langchain]
+    temp_sets: [det]
+  b2:
+    conditions:
+      - "so_step_constrained:n_steps=1:answer_first=False"
+      - "so_step_constrained:n_steps=5:answer_first=False"
+      - "so_step_constrained:n_steps=10:answer_first=False"
+    runners: [openai_sdk, azure_sdk, langchain]
+    temp_sets: [det]
+  b3:
+    conditions:
+      - plain_direct
+      - plain_cot
+      - so_answer_first
+      - so_reasoning_first
+      - "so_step_constrained:n_steps=1:answer_first=False"
+      - "so_step_constrained:n_steps=5:answer_first=False"
+      - "so_step_constrained:n_steps=10:answer_first=False"
+    runners: [openai_sdk, azure_sdk, langchain]
+    temp_sets: [sc]
