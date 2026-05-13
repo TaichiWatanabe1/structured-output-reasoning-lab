@@ -28,11 +28,17 @@ def _row(
     parsed: int | None,
     keys: list[str] | None = None,
     step_count: int = 1,
+    model_key: str = "gpt-4.1",
+    key_order_violation: bool = False,
 ) -> dict[str, object]:
     return {
         "run_id": "test",
         "condition_id": condition_id,
         "runner": runner,
+        "model_key": model_key,
+        "deployment": f"{model_key}-deploy",
+        "reasoning_effort": None,
+        "model_string": f"{model_key}-2025",
         "temp_set": temp_set,
         "temperature": 0.0 if temp_set == "det" else 0.7,
         "try_idx": try_idx,
@@ -47,15 +53,17 @@ def _row(
         "parsed_reasoning_step_count": step_count,
         "parse_failed": parsed is None,
         "correct": parsed == gold if parsed is not None else False,
+        "key_order_violation": key_order_violation,
         "latency_ms": 100,
         "prompt_tokens": 10,
         "completion_tokens": 5,
+        "run_order_idx": 0,
     }
 
 
 def _make_df() -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    # 4 問。AnswerFirst: 1問正解。ReasoningFirst: 3問正解。Runner = openai_sdk のみ。
+    # 4 問。AnswerFirst: 1問正解。ReasoningFirst: 3問正解。Runner = openai_sdk, Model = gpt-4.1。
     for qid in range(4):
         rows.append(
             _row(
@@ -88,10 +96,16 @@ def test_accuracy_table_basic() -> None:
     df = _make_df()
     tbl = accuracy_table(df)
     assert not tbl.empty
-    af = tbl[(tbl["condition_id"] == "so_answer_first") & (tbl["runner"] == "openai_sdk")]
-    rf = tbl[(tbl["condition_id"] == "so_reasoning_first") & (tbl["runner"] == "openai_sdk")]
+    af = tbl[
+        (tbl["condition_id"] == "so_answer_first") & (tbl["runner"] == "openai_sdk")
+    ]
+    rf = tbl[
+        (tbl["condition_id"] == "so_reasoning_first") & (tbl["runner"] == "openai_sdk")
+    ]
     assert af["accuracy"].iloc[0] == 0.25
     assert rf["accuracy"].iloc[0] == 0.75
+    # model_key 列があり、内容は gpt-4.1 だけ
+    assert set(tbl["model_key"]) == {"gpt-4.1"}
 
 
 def test_order_effect_mcnemar_runs() -> None:
@@ -101,6 +115,7 @@ def test_order_effect_mcnemar_runs() -> None:
     row = tbl.iloc[0]
     assert row["answer_first_acc"] == 0.25
     assert row["reasoning_first_acc"] == 0.75
+    assert row["model_key"] == "gpt-4.1"
     # q0: AF=correct, RF=correct (both)
     # q1: AF=wrong, RF=correct (c, RF only)
     # q2: AF=wrong, RF=correct (c, RF only)
@@ -108,6 +123,48 @@ def test_order_effect_mcnemar_runs() -> None:
     assert row["b_af_only"] == 0
     assert row["c_rf_only"] == 2
     assert row["n_paired"] == 4
+    # Newcombe CI が記録されている
+    assert "newcombe_lower_pp" in row.index
+    assert "newcombe_upper_pp" in row.index
+    # 点推定 +50pt なので CI 下限は負, 上限は正くらいのレンジに収まる
+    assert row["newcombe_lower_pp"] <= row["diff_pp"] <= row["newcombe_upper_pp"]
+
+
+def test_order_effect_separates_models() -> None:
+    """同じ条件で 2 model 分のデータがあると、それぞれ独立に集計される。"""
+    rows = []
+    for model in ("gpt-4.1", "gpt-5"):
+        for qid in range(4):
+            rows.append(
+                _row(
+                    condition_id="so_answer_first",
+                    runner="openai_sdk",
+                    temp_set="det",
+                    try_idx=0,
+                    question_id=f"q{qid}",
+                    gold=qid,
+                    parsed=qid if qid == 0 else qid + 100,
+                    keys=["answer", "reasoning"],
+                    model_key=model,
+                )
+            )
+            rows.append(
+                _row(
+                    condition_id="so_reasoning_first",
+                    runner="openai_sdk",
+                    temp_set="det",
+                    try_idx=0,
+                    question_id=f"q{qid}",
+                    gold=qid,
+                    parsed=qid if qid != 3 else qid + 100,
+                    keys=["reasoning", "answer"],
+                    model_key=model,
+                )
+            )
+    df = pd.DataFrame(rows)
+    tbl = order_effect_mcnemar(df)
+    assert len(tbl) == 2
+    assert set(tbl["model_key"]) == {"gpt-4.1", "gpt-5"}
 
 
 def test_runner_spread_single_runner_zero() -> None:
@@ -142,7 +199,7 @@ def test_majority_accuracy_with_sc() -> None:
     assert tbl["accuracy"].iloc[0] == 1.0  # どちらも多数決で正解
 
 
-def test_key_order_warnings_detects_mismatch() -> None:
+def test_key_order_warnings_uses_violation_flag() -> None:
     df = pd.DataFrame(
         [
             _row(
@@ -153,12 +210,14 @@ def test_key_order_warnings_detects_mismatch() -> None:
                 question_id="q0",
                 gold=1,
                 parsed=1,
-                keys=["answer", "reasoning"],  # 逆順 = mismatch
+                keys=["answer", "reasoning"],
+                key_order_violation=True,
             )
         ]
     )
     tbl = key_order_warnings(df)
     assert tbl.iloc[0]["key_order_mismatches"] == 1
+    assert tbl.iloc[0]["violation_rate"] == 1.0
 
 
 def test_write_summary_end_to_end(tmp_path: Path) -> None:
@@ -169,9 +228,19 @@ def test_write_summary_end_to_end(tmp_path: Path) -> None:
         for row in _make_df().to_dict(orient="records"):
             f.write(json.dumps(row) + "\n")
     (run_dir / "meta.json").write_text(
-        json.dumps({"stage": "b1", "git_commit": "abc", "git_dirty": False,
-                    "deployment": "test-deploy", "api_version": "2024-10-21",
-                    "conditions_yaml_sha256": "x" * 64}),
+        json.dumps(
+            {
+                "stage": "b1",
+                "git_commit": "abc",
+                "git_dirty": False,
+                "api_version": "2025-04-01-preview",
+                "exec_seed": 42,
+                "models": [
+                    {"key": "gpt-4.1", "deployment": "gpt-4.1-deploy", "reasoning_effort": None},
+                ],
+                "conditions_yaml_sha256": "x" * 64,
+            }
+        ),
         encoding="utf-8",
     )
     out = write_summary(run_id="test_run", results_root=tmp_path / "results" / "runs")
@@ -179,3 +248,4 @@ def test_write_summary_end_to_end(tmp_path: Path) -> None:
     assert "Summary" in text
     assert "Accuracy by" in text
     assert "so_reasoning_first" in text
+    assert "gpt-4.1" in text

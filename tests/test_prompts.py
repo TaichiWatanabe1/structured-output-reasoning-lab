@@ -1,4 +1,4 @@
-"""プロンプト定数の意図しない揺れを検出する。"""
+"""プロンプト定数の意図しない揺れを検出する (日本語固定)。"""
 
 from __future__ import annotations
 
@@ -29,18 +29,20 @@ def test_so_conditions_share_system_prompt() -> None:
     assert len(so_systems) == 1
 
 
-def test_plain_cot_contains_step_by_step() -> None:
-    assert "step by step" in PROMPTS["plain_cot"].system.lower()
+def test_plain_cot_contains_step_marker_ja() -> None:
+    assert "順を追って" in PROMPTS["plain_cot"].system
+    assert "Answer:" in PROMPTS["plain_cot"].system
 
 
-def test_plain_direct_forbids_extra_text() -> None:
-    sys_prompt = PROMPTS["plain_direct"].system.lower()
-    assert "only" in sys_prompt and "integer" in sys_prompt
+def test_plain_direct_restricts_to_integer_only_ja() -> None:
+    sys_prompt = PROMPTS["plain_direct"].system
+    assert "整数" in sys_prompt
+    assert "他の文字" in sys_prompt or "だけ" in sys_prompt
 
 
 def test_user_template_renders_question() -> None:
-    s, u = PROMPTS["plain_direct"].render("What is 1+1?")
-    assert "What is 1+1?" in u
+    s, u = PROMPTS["plain_direct"].render("1 + 1 はいくつですか？")
+    assert "1 + 1 はいくつですか？" in u
     assert "{question}" not in u
     assert s == PROMPTS["plain_direct"].system
 
@@ -63,7 +65,7 @@ def test_prompts_hashes_are_stable() -> None:
         f"{k}\n{v.system}\n{v.user}" for k, v in sorted(PROMPTS.items())
     )
     actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    expected = "14445125454dc6a72b6c9e87149656690c58344a650808472da9a7d01c859eca"
+    expected = "8243642ca5d9161e9112da54f8f35e5d3a2d14d0ac94b15ff21c6f247ec450cd"
     assert actual == expected, (
         f"prompts.py changed. update expected digest if intentional. got={actual}"
     )
