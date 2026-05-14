@@ -11,11 +11,11 @@ from dataclasses import dataclass
 # GSM8K の reference answer 末尾の "#### 18" 形式から整数を抽出する。
 _GOLD_ANSWER_RE = re.compile(r"####\s*(-?\d[\d,]*(?:\.\d+)?)")
 
-# Plain 系応答から末尾整数を拾う。"Answer: 42." や末尾改行も許容。
-# 1) "Answer: <num>" を最優先
+# Plain 系応答から末尾整数を拾う。"答え: 42" / "Answer: 42." や末尾改行も許容。
+# 1) "答え: <num>" または "Answer: <num>" を最優先 (plain_cot は 答え:、fallback で Answer: も受理)
 # 2) 末尾の整数を fallback
 _ANSWER_PREFIX_RE = re.compile(
-    r"Answer\s*[:：]\s*\$?(-?\d[\d,]*(?:\.\d+)?)",
+    r"(?:答え|Answer)\s*[:：]\s*\$?(-?\d[\d,]*(?:\.\d+)?)",
     re.IGNORECASE,
 )
 _TRAILING_NUM_RE = re.compile(r"(-?\d[\d,]*(?:\.\d+)?)\D*\Z")

@@ -123,11 +123,23 @@ def majority_accuracy_table(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+_KEY_ORDER_GATE_THRESHOLD = 0.01
+
+
+def _key_order_violation_rate(g: pd.DataFrame) -> float:
+    if "key_order_violation" not in g.columns or g.empty:
+        return 0.0
+    return float(g["key_order_violation"].fillna(False).astype(bool).mean())
+
+
 def order_effect_mcnemar(df: pd.DataFrame) -> pd.DataFrame:
     """順序効果 H1: so_reasoning_first vs so_answer_first を Runner × Model ごとに検定。
 
     同じ question_id 上のペア比較。temp_set=det のみを対象。
     Newcombe paired CI も併記する。
+    `key_order_violation` 違反率が SO の両条件いずれかで 1% を超える cell は
+    `excluded_by_key_order_gate=True` を立て、`mcnemar_p` / `newcombe_*_pp` を
+    NaN にして採点対象外とする (docs/experiment_design.md §8)。
     """
     if df.empty:
         return pd.DataFrame()
@@ -158,16 +170,31 @@ def order_effect_mcnemar(df: pd.DataFrame) -> pd.DataFrame:
         f = int(((af_c) & (~rf_c)).sum())  # AF のみ正解 (b)
         g = int(((~af_c) & (rf_c)).sum())  # RF のみ正解 (c)
         h = int(((~af_c) & (~rf_c)).sum())  # 両方不正解
-        table = [[e, f], [g, h]]
-        try:
-            result = mcnemar(table, exact=True)
-            pval = float(result.pvalue)
-        except Exception:  # noqa: BLE001
+
+        af_viol = _key_order_violation_rate(af_g)
+        rf_viol = _key_order_violation_rate(rf_g)
+        excluded = (
+            af_viol > _KEY_ORDER_GATE_THRESHOLD
+            or rf_viol > _KEY_ORDER_GATE_THRESHOLD
+        )
+
+        if excluded:
             pval = float("nan")
-        # Newcombe paired CI (RF - AF の方向で diff を計算したいので A=RF, B=AF)
-        # 引数の意味: e=A正解&B正解, f=A正解&B不正解, g=A不正解&B正解, h=両方不正解
-        # A=RF, B=AF にマッピング: e=両方, f=RF only, g=AF only, h=両方不正解
-        ci = newcombe_paired_diff_ci(e=e, f=g, g=f, h=h)  # noqa: E501
+            ci_lower_pp = float("nan")
+            ci_upper_pp = float("nan")
+        else:
+            table = [[e, f], [g, h]]
+            try:
+                result = mcnemar(table, exact=True)
+                pval = float(result.pvalue)
+            except Exception:  # noqa: BLE001
+                pval = float("nan")
+            # Newcombe paired CI (RF - AF の方向で diff を計算したいので A=RF, B=AF)
+            # 引数の意味: e=A正解&B正解, f=A正解&B不正解, g=A不正解&B正解, h=両方不正解
+            # A=RF, B=AF にマッピング: e=両方, f=RF only, g=AF only, h=両方不正解
+            ci = newcombe_paired_diff_ci(e=e, f=g, g=f, h=h)  # noqa: E501
+            ci_lower_pp = ci.lower * 100.0
+            ci_upper_pp = ci.upper * 100.0
         af_acc = float(af_c.mean())
         rf_acc = float(rf_c.mean())
         records.append(
@@ -178,11 +205,14 @@ def order_effect_mcnemar(df: pd.DataFrame) -> pd.DataFrame:
                 "answer_first_acc": af_acc,
                 "reasoning_first_acc": rf_acc,
                 "diff_pp": (rf_acc - af_acc) * 100.0,
-                "newcombe_lower_pp": ci.lower * 100.0,
-                "newcombe_upper_pp": ci.upper * 100.0,
+                "newcombe_lower_pp": ci_lower_pp,
+                "newcombe_upper_pp": ci_upper_pp,
                 "b_af_only": f,
                 "c_rf_only": g,
                 "mcnemar_p": pval,
+                "af_key_order_violation_rate": af_viol,
+                "rf_key_order_violation_rate": rf_viol,
+                "excluded_by_key_order_gate": excluded,
             }
         )
     return pd.DataFrame.from_records(records).sort_values(["model_key", "runner"])
@@ -252,6 +282,13 @@ def _df_to_markdown(df: pd.DataFrame) -> str:
     return (df.to_markdown(index=False, floatfmt=".4f") or "") + "\n"
 
 
+def _count_errors(errors_path: Path) -> int:
+    if not errors_path.exists():
+        return 0
+    with errors_path.open("r", encoding="utf-8") as f:
+        return sum(1 for line in f if line.strip())
+
+
 def write_summary(
     run_id: str,
     results_root: Path | str = "results/runs",
@@ -261,6 +298,8 @@ def write_summary(
     if not jsonl.exists():
         raise FileNotFoundError(f"raw.jsonl not found: {jsonl}")
     df = load_jsonl(jsonl)
+    n_errors = _count_errors(root / "errors.jsonl")
+    n_rows = len(df)
 
     sections: list[str] = []
     sections.append(f"# Summary — `{run_id}`\n")
@@ -282,6 +321,15 @@ def write_summary(
                     f"reasoning_effort=`{m.get('reasoning_effort')}`\n"
                 )
 
+    total_attempts = n_rows + n_errors
+    err_rate = (n_errors / total_attempts) if total_attempts else 0.0
+    sections.append(
+        f"\n### Call counts\n"
+        f"- rows in `raw.jsonl`: {n_rows}\n"
+        f"- entries in `errors.jsonl`: {n_errors} "
+        f"(error rate {err_rate:.4f} of {total_attempts} attempts)\n"
+    )
+
     sections.append("\n## Accuracy by (condition, runner, model_key, temp_set)\n")
     sections.append(_df_to_markdown(accuracy_table(df)))
 
@@ -290,6 +338,8 @@ def write_summary(
 
     sections.append(
         "\n## H1 — Order effect (so_reasoning_first vs so_answer_first) [+Newcombe paired CI]\n"
+        "_Cell が `excluded_by_key_order_gate=True` の場合、`mcnemar_p` と Newcombe CI は NaN "
+        "(SO 両条件いずれかで key_order_violation > 1%; docs/experiment_design.md §8)。_\n"
     )
     sections.append(_df_to_markdown(order_effect_mcnemar(df)))
 

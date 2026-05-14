@@ -29,12 +29,13 @@ SO field 順序効果を抑制する」を検証する。
 # Python 3.12.4 が必要 (.python-version で固定)
 uv sync --frozen
 
-# .env を作成
+# .env を作成 (credentials のみ)
 cp .env.example .env
 # AZURE_OPENAI_API_KEY / ENDPOINT / API_VERSION
-# AZURE_OPENAI_DEPLOYMENT_NAME_GPT41 / _GPT41_MINI / _GPT5
-# AZURE_OPENAI_REASONING_EFFORT=minimal  (gpt-5 用)
-# EXEC_SEED=42                            (省略可)
+# EXEC_SEED=42  (省略可)
+
+# モデル設定 (key / deployment / reasoning_effort) は conditions.yaml の
+# `models:` セクションに記述する。各自 Azure のデプロイ名で書き換える。
 ```
 
 ## 実行

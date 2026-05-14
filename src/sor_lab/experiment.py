@@ -48,6 +48,7 @@ class ExperimentConfig:
     conditions: list[str]  # 全 condition_id
     runners: list[str]
     temp_sets: dict[str, TempSet]
+    model_specs: list[ModelSpec]
     dataset_seed: int
     dataset_n: int
     stages: dict[str, StageSpec]
@@ -56,6 +57,41 @@ class ExperimentConfig:
     @property
     def yaml_sha256(self) -> str:
         return hashlib.sha256(self.raw_yaml.encode("utf-8")).hexdigest()
+
+
+def _parse_model_specs(raw_models: Any) -> list[ModelSpec]:
+    """`conditions.yaml` の `models:` セクションを `ModelSpec` のリストに変換。"""
+    if not raw_models:
+        raise ValueError(
+            "conditions.yaml must declare at least one model under 'models:'"
+        )
+    specs: list[ModelSpec] = []
+    seen_keys: set[str] = set()
+    for entry in raw_models:
+        key = entry.get("key")
+        deployment = entry.get("deployment")
+        reasoning_effort = entry.get("reasoning_effort")
+        if not key or not isinstance(key, str):
+            raise ValueError(f"models entry missing 'key': {entry!r}")
+        if not deployment or not isinstance(deployment, str):
+            raise ValueError(
+                f"models entry {key!r} has empty or invalid 'deployment'"
+            )
+        if key in seen_keys:
+            raise ValueError(f"duplicate model key in conditions.yaml: {key!r}")
+        seen_keys.add(key)
+        re_val: str | None
+        if reasoning_effort is None or reasoning_effort == "":
+            re_val = None
+        elif isinstance(reasoning_effort, str):
+            re_val = reasoning_effort
+        else:
+            raise ValueError(
+                f"models entry {key!r} has invalid reasoning_effort: "
+                f"{reasoning_effort!r}"
+            )
+        specs.append(ModelSpec(key=key, deployment=deployment, reasoning_effort=re_val))
+    return specs
 
 
 def load_config(path: str | os.PathLike[str] = "conditions.yaml") -> ExperimentConfig:
@@ -68,6 +104,7 @@ def load_config(path: str | os.PathLike[str] = "conditions.yaml") -> ExperimentC
         name: TempSet(name=name, temperature=v["temperature"], n_tries=v["n_tries"])
         for name, v in data["temp_sets"].items()
     }
+    model_specs = _parse_model_specs(data.get("models"))
     dataset = data["dataset"]
     stages_raw = data.get("stages", {})
     stages: dict[str, StageSpec] = {}
@@ -84,6 +121,7 @@ def load_config(path: str | os.PathLike[str] = "conditions.yaml") -> ExperimentC
         conditions=conditions,
         runners=runners,
         temp_sets=temp_sets,
+        model_specs=model_specs,
         dataset_seed=int(dataset["seed"]),
         dataset_n=int(dataset["n"]),
         stages=stages,
@@ -342,11 +380,11 @@ def run_stage(
     problems = load_subset(n=n, seed=cfg.dataset_seed)
     problems_by_id: dict[str, Problem] = {p.question_id: p for p in problems}
 
-    model_specs = settings.models()
+    model_specs = cfg.model_specs
     if not model_specs:
         raise RuntimeError(
-            "No model deployments configured. "
-            "Set AZURE_OPENAI_DEPLOYMENT_NAME_GPT41 / _GPT41_MINI / _GPT5 in .env"
+            "No models configured. Add at least one entry to the 'models:' "
+            "section of conditions.yaml."
         )
     model_specs_by_key: dict[str, ModelSpec] = {m.key: m for m in model_specs}
 
@@ -354,6 +392,7 @@ def run_stage(
     run_dir = Path(results_root) / rid
     run_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = run_dir / "raw.jsonl"
+    errors_path = run_dir / "errors.jsonl"
 
     write_meta(
         run_dir,
@@ -375,7 +414,11 @@ def run_stage(
     started = time.perf_counter()
     n_done = 0
     n_skipped = 0
-    with jsonl_path.open("a", encoding="utf-8") as out:
+    n_errors = 0
+    with (
+        jsonl_path.open("a", encoding="utf-8") as out,
+        errors_path.open("a", encoding="utf-8") as errors_out,
+    ):
         for run_order_idx, call in enumerate(plan):
             key: _RowKey = (
                 call.condition_id,
@@ -401,12 +444,15 @@ def run_stage(
             prompt = get_prompt(call.condition_id)
             system_prompt, user_prompt = prompt.render(problem.question)
 
+            # SC 試行は seed 未指定で独立サンプルを取る。det (n_tries=1) のみ
+            # `dataset_seed` を渡して再現性を確保する。docs/experiment_design.md §5 参照。
+            call_seed = cfg.dataset_seed if temp.n_tries == 1 else None
             try:
                 result = runner.run(
                     condition_id=call.condition_id,
                     question=problem.question,
                     temperature=temp.temperature,
-                    seed=cfg.dataset_seed,
+                    seed=call_seed,
                 )
             except Exception as exc:  # noqa: BLE001
                 err_row = {
@@ -419,8 +465,12 @@ def run_stage(
                     "question_id": call.question_id,
                     "run_order_idx": run_order_idx,
                     "error": f"{type(exc).__name__}: {exc}",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
+                errors_out.write(json.dumps(err_row, ensure_ascii=False) + "\n")
+                errors_out.flush()
                 print(f"[error] {err_row['error']}", file=sys.stderr)
+                n_errors += 1
                 continue
 
             correct = (
@@ -448,7 +498,8 @@ def run_stage(
     elapsed = time.perf_counter() - started
     print(
         f"[run_stage] stage={stage_name} run_id={rid} done={n_done} "
-        f"skipped={n_skipped} total_planned={len(plan)} elapsed={elapsed:.1f}s",
+        f"skipped={n_skipped} errors={n_errors} total_planned={len(plan)} "
+        f"elapsed={elapsed:.1f}s",
         file=sys.stderr,
     )
     return jsonl_path

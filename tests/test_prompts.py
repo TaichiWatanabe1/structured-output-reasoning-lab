@@ -9,13 +9,15 @@ import pytest
 from sor_lab.prompts import PROMPTS, get_prompt
 
 
-def test_all_five_conditions_present() -> None:
+def test_all_conditions_present() -> None:
     assert set(PROMPTS.keys()) == {
         "plain_direct",
         "plain_cot",
         "so_answer_first",
         "so_reasoning_first",
         "so_step_constrained",
+        "lit_mgsm_direct_ja",
+        "lit_mgsm_native_cot_ja",
     }
 
 
@@ -29,9 +31,34 @@ def test_so_conditions_share_system_prompt() -> None:
     assert len(so_systems) == 1
 
 
+def test_so_answer_first_vs_reasoning_first_share_user_template() -> None:
+    """H1 の独立変数は field 順序のみ。user テンプレも完全一致。"""
+    assert (
+        PROMPTS["so_answer_first"].user
+        == PROMPTS["so_reasoning_first"].user
+        == PROMPTS["so_step_constrained"].user
+    )
+
+
+def test_so_schema_descriptions_match_between_orders() -> None:
+    """`AnswerFirst` と `ReasoningFirst` で answer / reasoning の description が一致。
+    Field 順序以外の交絡を排する pre-registered 不変条件。
+    """
+    from sor_lab.schemas import AnswerFirst, ReasoningFirst
+
+    assert (
+        AnswerFirst.model_fields["answer"].description
+        == ReasoningFirst.model_fields["answer"].description
+    )
+    assert (
+        AnswerFirst.model_fields["reasoning"].description
+        == ReasoningFirst.model_fields["reasoning"].description
+    )
+
+
 def test_plain_cot_contains_step_marker_ja() -> None:
     assert "順を追って" in PROMPTS["plain_cot"].system
-    assert "Answer:" in PROMPTS["plain_cot"].system
+    assert "答え:" in PROMPTS["plain_cot"].system
 
 
 def test_plain_direct_restricts_to_integer_only_ja() -> None:
@@ -65,7 +92,7 @@ def test_prompts_hashes_are_stable() -> None:
         f"{k}\n{v.system}\n{v.user}" for k, v in sorted(PROMPTS.items())
     )
     actual = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    expected = "8243642ca5d9161e9112da54f8f35e5d3a2d14d0ac94b15ff21c6f247ec450cd"
+    expected = "de8afeb504e378129b70af9886ce4ebf962106f431d6232d404590c3db685e64"
     assert actual == expected, (
         f"prompts.py changed. update expected digest if intentional. got={actual}"
     )

@@ -199,6 +199,62 @@ def test_majority_accuracy_with_sc() -> None:
     assert tbl["accuracy"].iloc[0] == 1.0  # どちらも多数決で正解
 
 
+def test_order_effect_gate_excludes_high_violation_cell() -> None:
+    """SO 両条件いずれかで violation_rate > 1% の cell は H1 検定から除外。"""
+    import math
+
+    rows: list[dict[str, object]] = []
+    n = 200
+    # so_answer_first を 200 件、うち 5 件 (2.5%) を key_order_violation=True にする
+    for qid in range(n):
+        rows.append(
+            _row(
+                condition_id="so_answer_first",
+                runner="openai_sdk",
+                temp_set="det",
+                try_idx=0,
+                question_id=f"q{qid}",
+                gold=qid,
+                parsed=qid if qid % 2 == 0 else qid + 100,
+                keys=["answer", "reasoning"],
+                key_order_violation=(qid < 5),
+            )
+        )
+        rows.append(
+            _row(
+                condition_id="so_reasoning_first",
+                runner="openai_sdk",
+                temp_set="det",
+                try_idx=0,
+                question_id=f"q{qid}",
+                gold=qid,
+                parsed=qid,
+                keys=["reasoning", "answer"],
+                key_order_violation=False,
+            )
+        )
+    tbl = order_effect_mcnemar(pd.DataFrame(rows))
+    assert not tbl.empty
+    row = tbl.iloc[0]
+    assert bool(row["excluded_by_key_order_gate"]) is True
+    assert math.isnan(float(row["mcnemar_p"]))
+    assert math.isnan(float(row["newcombe_lower_pp"]))
+    # 点推定 (diff_pp) は除外関係なく出る (記述目的)
+    assert row["diff_pp"] > 0
+
+
+def test_order_effect_gate_passes_when_violation_is_below_threshold() -> None:
+    """違反率 0% の cell は通常どおり mcnemar_p / CI が計算される。"""
+    import math
+
+    df = _make_df()  # default で violation=False
+    tbl = order_effect_mcnemar(df)
+    assert not tbl.empty
+    row = tbl.iloc[0]
+    assert bool(row["excluded_by_key_order_gate"]) is False
+    assert not math.isnan(float(row["mcnemar_p"]))
+
+
 def test_key_order_warnings_uses_violation_flag() -> None:
     df = pd.DataFrame(
         [

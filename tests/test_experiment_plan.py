@@ -30,6 +30,7 @@ def _cfg() -> ExperimentConfig:
             "det": TempSet("det", 0.0, 1),
             "sc": TempSet("sc", 0.7, 3),
         },
+        model_specs=_models(),
         dataset_seed=42,
         dataset_n=2,
         stages={},

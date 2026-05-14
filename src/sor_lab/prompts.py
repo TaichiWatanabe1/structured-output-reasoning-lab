@@ -37,7 +37,7 @@ PROMPTS: dict[str, PromptTemplate] = {
     "plain_cot": PromptTemplate(
         system=(
             "あなたは算数の教師です。順を追って考え、最後の行に整数の答えを "
-            "「Answer: 」の後に記載してください。"
+            "「答え: 」の後に記載してください。"
         ),
         user=_USER_TEMPLATE,
     ),
@@ -51,6 +51,19 @@ PROMPTS: dict[str, PromptTemplate] = {
     ),
     "so_step_constrained": PromptTemplate(
         system=_SO_SYSTEM,
+        user=_USER_TEMPLATE,
+    ),
+    # b0 文献比較校正条件 (Shi et al., 2022 / Kojima et al., 2022 相当)
+    # 主仮説の検定対象ではなく、公表 MGSM accuracy との比較用。
+    "lit_mgsm_direct_ja": PromptTemplate(
+        system="問題を解いてください。整数の答えだけを出力してください。",
+        user=_USER_TEMPLATE,
+    ),
+    "lit_mgsm_native_cot_ja": PromptTemplate(
+        system=(
+            "問題をステップごとに解き、最後に「答え: 数字」の形式で"
+            "整数の答えを書いてください。"
+        ),
         user=_USER_TEMPLATE,
     ),
 }

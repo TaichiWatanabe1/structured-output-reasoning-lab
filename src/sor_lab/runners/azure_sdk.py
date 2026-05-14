@@ -99,6 +99,7 @@ class AzureSdkRunner:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             model_string=model_string,
+            schema_cls=schema_cls,
         )
 
 
