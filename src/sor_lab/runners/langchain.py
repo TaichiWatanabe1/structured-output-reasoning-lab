@@ -81,8 +81,10 @@ class LangChainRunner:
             latency_ms = int((time.perf_counter() - start) * 1000)
 
             ai_msg = result.get("raw") if isinstance(result, dict) else None
-            parsed = result.get("parsed") if isinstance(result, dict) else None
 
+            # AIMessage.content をそのまま渡す。`parsed` 経由の `model_dump_json`
+            # では Pydantic が宣言順に正規化するため raw_response_keys が
+            # モデル実生成順を反映しなくなり key_order_violation gate が無効化される。
             raw_content = ""
             if ai_msg is not None:
                 content = getattr(ai_msg, "content", "")
@@ -91,11 +93,6 @@ class LangChainRunner:
             usage = _extract_usage(ai_msg)
             model_string = _extract_model_string(ai_msg)
 
-            if parsed is not None:
-                # Pydantic instance を JSON 文字列化して raw に揃える (キー順保持)
-                if hasattr(parsed, "model_dump_json"):
-                    raw_content = parsed.model_dump_json()  # type: ignore[attr-defined]
-
             return _parse_response(
                 raw=raw_content,
                 structured=True,
@@ -103,6 +100,7 @@ class LangChainRunner:
                 prompt_tokens=usage[0],
                 completion_tokens=usage[1],
                 model_string=model_string,
+                schema_cls=schema_cls,
             )
 
         # Plain 系

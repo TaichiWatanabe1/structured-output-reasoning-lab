@@ -6,6 +6,8 @@ import json
 import time
 from typing import Any
 
+from pydantic import BaseModel, ValidationError
+
 from sor_lab.config import AzureOpenAISettings, ModelSpec
 from sor_lab.evaluation import parse_plain_answer
 from sor_lab.prompts import get_prompt
@@ -94,6 +96,7 @@ class OpenAISdkRunner:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             model_string=model_string,
+            schema_cls=schema_cls,
         )
 
 
@@ -104,8 +107,14 @@ def _parse_response(
     prompt_tokens: int | None,
     completion_tokens: int | None,
     model_string: str | None = None,
+    schema_cls: type[BaseModel] | None = None,
 ) -> RunnerResult:
-    """Plain / Structured 共通の parse ロジック。"""
+    """Plain / Structured 共通の parse ロジック。
+
+    Structured では `schema_cls.model_validate` を通って初めて採点対象になる。
+    `ValidationError` は `parse_failed=True` として集計から除外される
+    (docs/experiment_design.md §8)。
+    """
     if not structured:
         answer = parse_plain_answer(raw)
         return RunnerResult(
@@ -135,30 +144,69 @@ def _parse_response(
             model_string=model_string,
         )
 
-    keys = list(data.keys())
-    answer_raw = data.get("answer")
+    # raw_response_keys は schema 検証 *前* の dict 挿入順を取る (モデル生成順)。
+    keys = list(data.keys()) if isinstance(data, dict) else []
+
+    if schema_cls is not None:
+        try:
+            model = schema_cls.model_validate(data)
+        except ValidationError:
+            return RunnerResult(
+                raw_response=raw,
+                raw_response_keys=keys or None,
+                parsed_answer=None,
+                parsed_reasoning=None,
+                parse_failed=True,
+                latency_ms=latency_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                model_string=model_string,
+            )
+        answer_val = getattr(model, "answer", None)
+        answer = int(answer_val) if isinstance(answer_val, int) else None
+        reasoning: str | list[str] | None
+        if hasattr(model, "reasoning_steps"):
+            steps = getattr(model, "reasoning_steps", None)
+            reasoning = steps if isinstance(steps, list) else None
+        elif hasattr(model, "reasoning"):
+            r = getattr(model, "reasoning", None)
+            reasoning = r if isinstance(r, str) else None
+        else:
+            reasoning = None
+        return RunnerResult(
+            raw_response=raw,
+            raw_response_keys=keys,
+            parsed_answer=answer,
+            parsed_reasoning=reasoning,
+            parse_failed=answer is None,
+            latency_ms=latency_ms,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            model_string=model_string,
+        )
+
+    # schema_cls が無いケース (旧テスト互換): 緩い抽出のみ。
+    answer_raw = data.get("answer") if isinstance(data, dict) else None
     try:
         answer = int(answer_raw) if answer_raw is not None else None
     except (ValueError, TypeError):
         answer = None
 
-    reasoning: str | list[str] | None
-    if "reasoning_steps" in data:
+    if isinstance(data, dict) and "reasoning_steps" in data:
         steps = data["reasoning_steps"]
         reasoning = steps if isinstance(steps, list) else None
-    elif "reasoning" in data:
+    elif isinstance(data, dict) and "reasoning" in data:
         r = data["reasoning"]
         reasoning = r if isinstance(r, str) else None
     else:
         reasoning = None
 
-    parse_failed = answer is None
     return RunnerResult(
         raw_response=raw,
         raw_response_keys=keys,
         parsed_answer=answer,
         parsed_reasoning=reasoning,
-        parse_failed=parse_failed,
+        parse_failed=answer is None,
         latency_ms=latency_ms,
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
