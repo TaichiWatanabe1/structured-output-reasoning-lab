@@ -15,6 +15,10 @@ conditions:
   - id: "so_step_constrained:n_steps=5:answer_first=False"
   - id: "so_step_constrained:n_steps=10:answer_first=False"
 
+  # b0 文献比較校正条件 (主仮説対象外・記述統計のみ)
+  - id: lit_mgsm_direct_ja
+  - id: lit_mgsm_native_cot_ja
+
 # 軸3: Runner
 runners: [openai_sdk, azure_sdk, langchain]
 
@@ -27,8 +31,20 @@ temp_sets:
     temperature: 0.7
     n_tries: 5
 
-# 軸5 (Model) は .env の AZURE_OPENAI_DEPLOYMENT_NAME_GPT41 / _GPT41_MINI / _GPT5
-# で指定されたデプロイから自動列挙される。本ファイルには記述しない。
+# 軸5: Model (key / deployment / reasoning_effort)
+# - key: JSONL の model_key カラムに入る論理名。
+# - deployment: Azure テナント固有のデプロイ名 (各自書き換える)。
+# - reasoning_effort: gpt-5 系 reasoning モデルのみ非 null。それ以外は null。
+models:
+  - key: gpt-4.1
+    deployment: <fill-in-gpt-4.1-deployment>
+    reasoning_effort: null
+  - key: gpt-4.1-mini
+    deployment: <fill-in-gpt-4.1-mini-deployment>
+    reasoning_effort: null
+  - key: gpt-5
+    deployment: <fill-in-gpt-5-deployment>
+    reasoning_effort: minimal
 
 # データ (MGSM-ja 全 250 問)
 dataset:
@@ -41,10 +57,15 @@ dataset:
 # Stage プリセット (CLI `--stage <name>` で選択)
 stages:
   smoke:
-    conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first]
+    conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first, lit_mgsm_direct_ja, lit_mgsm_native_cot_ja]
     runners: [openai_sdk, azure_sdk, langchain]
     temp_sets: [det]
     n_questions: 1
+  b0:
+    # 文献比較校正 (2 lit 条件 × det × 3 model = 4,500 calls)
+    conditions: [lit_mgsm_direct_ja, lit_mgsm_native_cot_ja]
+    runners: [openai_sdk, azure_sdk, langchain]
+    temp_sets: [det]
   b1:
     # Plain + SO 基本 (4 cond) × det × 3 model
     conditions: [plain_direct, plain_cot, so_answer_first, so_reasoning_first]

@@ -50,6 +50,10 @@ def test_parse_gold_answer_missing_marker() -> None:
         ("Answer: $1,200", 1200),
         ("Answer: 42.0", 42),
         ("answer:  100  ", 100),
+        # plain_cot の日本語マーカー (2026-05-14 変更)
+        ("ステップ1. 計算...\n答え: 42", 42),
+        ("答え: 1,200", 1200),
+        ("答え：100", 100),
     ],
 )
 def test_parse_plain_answer_success(text: str, expected: int) -> None:
