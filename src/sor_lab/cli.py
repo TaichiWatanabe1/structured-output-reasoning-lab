@@ -6,11 +6,31 @@ from pathlib import Path
 
 import typer
 
-from sor_lab.config import load_settings
-from sor_lab.experiment import load_config, run_stage
+from sor_lab.config import AzureOpenAISettings, load_settings
+from sor_lab.experiment import ExperimentConfig, load_config, run_stage
 
 
 app = typer.Typer(help="Structured Output Reasoning Lab")
+
+
+def _load_or_exit(
+    conditions_yaml: Path,
+) -> tuple[ExperimentConfig, AzureOpenAISettings]:
+    """`load_config` + `load_settings` を実行し、欠落があれば exit。"""
+    try:
+        cfg = load_config(conditions_yaml)
+    except ValueError as exc:
+        typer.echo(f"ERROR: {conditions_yaml} の解析に失敗: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    settings = load_settings()
+    if not settings.is_complete():
+        missing = ", ".join(settings.missing_fields())
+        typer.echo(
+            f"ERROR: 環境変数が未設定: {missing}。.env を確認してください。",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return cfg, settings
 
 
 @app.command()
@@ -20,15 +40,7 @@ def smoke(
     ),
 ) -> None:
     """1 問 × 全条件で疎通確認 (conditions.yaml の `stages.smoke`)。"""
-    cfg = load_config(conditions_yaml)
-    settings = load_settings()
-    if not settings.is_complete():
-        missing = ", ".join(settings.missing_fields())
-        typer.echo(
-            f"ERROR: 環境変数が未設定: {missing}。.env を確認してください。",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    cfg, settings = _load_or_exit(conditions_yaml)
     path = run_stage(cfg=cfg, stage_name="smoke", settings=settings)
     typer.echo(f"smoke run wrote: {path}")
 
@@ -44,15 +56,7 @@ def run(
     ),
 ) -> None:
     """指定 stage を実行。"""
-    cfg = load_config(conditions_yaml)
-    settings = load_settings()
-    if not settings.is_complete():
-        missing = ", ".join(settings.missing_fields())
-        typer.echo(
-            f"ERROR: 環境変数が未設定: {missing}。.env を確認してください。",
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    cfg, settings = _load_or_exit(conditions_yaml)
     path = run_stage(cfg=cfg, stage_name=stage, settings=settings, run_id=run_id)
     typer.echo(f"stage {stage!r} wrote: {path}")
 
